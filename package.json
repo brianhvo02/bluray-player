@@ -5,6 +5,9 @@
   "description": "A library to play Blu-ray discs in the browser.",
   "main": "index.js",
   "scripts": {
+    "build": "tsc",
+    "dev": "tsc -w",
+    "serve": "serve",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {
@@ -18,6 +21,7 @@
   },
   "homepage": "https://github.com/brianhvo02/bluray-player#readme",
   "devDependencies": {
+    "serve": "^14.2.5",
     "typescript": "^5.9.3"
   }
 }
