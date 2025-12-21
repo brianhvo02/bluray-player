@@ -1,7 +1,8 @@
 import { 
-    BDMV_VERSIONS, INDX_SIG1, 
+    BDMV_VERSIONS, INDX_SIG1, INDX_ACCESS_PROHIBITED_MASK, INDX_ACCESS_HIDDEN_MASK,
     IndxHdmvPlaybackType, IndxBdjPlaybackType, IndxObjectType,
-    type HdmvObject, type BdjObject, type IndexObject, type BlurayIndex,
+    type HdmvObject, type BdjObject, type IndexObject, type TitleObject, 
+    type BlurayIndex, type BlurayTitle, type BlurayTitleInfo,
 } from "./types/BlurayIndex.js";
 import { binToStr, readBits } from "./utils.js";
 
@@ -10,6 +11,7 @@ type FileMap = Record<string, File>;
 export default class BlurayPlayer {
     files: FileMap;
     index: BlurayIndex;
+    titleInfo: BlurayTitleInfo;
 
     static async load() {
         const input = document.createElement('input');
@@ -47,7 +49,7 @@ export default class BlurayPlayer {
             throw new Error('Could not parse index.bdmv.');
         this.index = index;
         // TODO: Check for incomplete disc (bluray.c:1017)
-        this.generateTitleInfo();
+        this.titleInfo = this.generateTitleInfo();
     }
 
     parseHeader(type: number, view: DataView) {
@@ -146,7 +148,7 @@ export default class BlurayPlayer {
         if (!topMenu) return null;
 
         const numTitles = dataView.getUint16(indexStart + 28);
-        const titles: IndexObject[] = [];
+        const titles: TitleObject[] = [];
         if (!numTitles) {
             if (firstPlay.objectType == IndxObjectType.HDMV && firstPlay.hdmv?.idRef == 0xffff && 
                 topMenu.objectType == IndxObjectType.HDMV && topMenu.hdmv?.idRef == 0xffff) {
@@ -178,30 +180,34 @@ export default class BlurayPlayer {
         return { indxVersion, appInfo, firstPlay, topMenu, titles };
     }
 
-    generateTitleInfo() {
+    generateTitleInfo(): BlurayTitleInfo {
         const blurayDetected = true;
 
         const {
             titles: indexedTitles,
+            topMenu, firstPlay,
             appInfo: { 
                 videoFormat, frameRate, initialDynamicRangeType, contentExistFlag: contentExist3D,
                 initialOutputModePreference, userData: providerData,
-            }
+            },
         } = this.index;
 
         let numHdmvTitles = 0;
         let numBdjTitles = 0;
         let bdjDetected = false;
-        const titles = indexedTitles.map(({ objectType, accessType, hdmv, bdj }) => {
+
+        const titles = indexedTitles.map<BlurayTitle>(({ objectType, accessType, hdmv, bdj }) => {
             if (objectType === IndxObjectType.HDMV) {
                 if (!hdmv) 
                     throw new Error('HDMV Object type mismatch.');
                 numHdmvTitles++;
                 
                 return {
+                    bdj: false,
                     idRef: hdmv.idRef,
                     interactive: hdmv.playbackType === IndxHdmvPlaybackType.INTERACTIVE,
-                    accessible: accessType 
+                    accessible: !(accessType & INDX_ACCESS_PROHIBITED_MASK),
+                    hidden: Boolean(accessType & INDX_ACCESS_HIDDEN_MASK),
                 };
             }
             
@@ -211,13 +217,78 @@ export default class BlurayPlayer {
             numBdjTitles++;
 
             return {
-                idRef: parseInt(bdj.name)
+                bdj: true,
+                idRef: parseInt(bdj.name),
+                interactive: bdj.playbackType === IndxBdjPlaybackType.INTERACTIVE,
+                accessible: !(accessType & INDX_ACCESS_PROHIBITED_MASK),
+                hidden: Boolean(accessType & INDX_ACCESS_HIDDEN_MASK),
             };
         });
+
+        if (firstPlay.objectType === IndxObjectType.BDJ && firstPlay.bdj) {
+            bdjDetected = true;
+            titles.push({
+                bdj: true,
+                interactive: firstPlay.bdj.playbackType === IndxBdjPlaybackType.INTERACTIVE,
+                idRef: parseInt(firstPlay.bdj.name),
+                accessible: false,
+                hidden: true,
+            });
+        }
+        if (firstPlay.objectType === IndxObjectType.HDMV && firstPlay.hdmv && firstPlay.hdmv.idRef !== 0xffff) {
+            titles.push({
+                bdj: false,
+                interactive: firstPlay.hdmv.playbackType === IndxHdmvPlaybackType.INTERACTIVE,
+                idRef: firstPlay.hdmv.idRef,
+                accessible: false,
+                hidden: true,
+            });
+        }
+
+        if (topMenu.objectType === IndxObjectType.BDJ && topMenu.bdj) {
+            bdjDetected = true;
+            titles.push({
+                bdj: true,
+                interactive: topMenu.bdj.playbackType === IndxBdjPlaybackType.INTERACTIVE,
+                idRef: parseInt(topMenu.bdj.name),
+                accessible: false,
+                hidden: false,
+            });
+        }
+        if (topMenu.objectType === IndxObjectType.HDMV && topMenu.hdmv && topMenu.hdmv.idRef !== 0xffff) {
+            titles.unshift({
+                bdj: false,
+                interactive: topMenu.hdmv.playbackType === IndxHdmvPlaybackType.INTERACTIVE,
+                idRef: topMenu.hdmv.idRef,
+                accessible: false,
+                hidden: false,
+            });
+        }
+
+        const firstPlaySupported = firstPlay.objectType === IndxObjectType.HDMV && firstPlay.hdmv && firstPlay.hdmv.idRef != 0xffff;
+        // if (firstPlay.objectType === IndxObjectType.BDJ)
+            // bd->disc_info.first_play_supported = bd->disc_info.bdj_handled;
+
+        const topMenuSupported = topMenu.objectType === IndxObjectType.HDMV && !!topMenu.hdmv && topMenu.hdmv.idRef != 0xffff;
+        // if (topMenu.objectType === IndxObjectType.BDJ)
+            // bd->disc_info.top_menu_supported = bd->disc_info.bdj_handled;
+
+        if (firstPlaySupported)
+            titles[titles.length - 1].accessible = true;
+        if (topMenuSupported)
+            titles[0].accessible = true;
+
+        /* TODO: increase player profile and version when 3D or UHD disc is detected (bluray.c:1133) */
+        /* TODO: populate title names (bluray.c:1150) */
         
         return { 
+            blurayDetected,
             videoFormat, frameRate, initialDynamicRangeType, 
             contentExist3D, initialOutputModePreference, providerData, 
+            bdjDetected, titles,
+            firstPlay: firstPlaySupported ? titles[titles.length - 1] : null,
+            topMenu: topMenuSupported ? titles[0] : null,
+            noMenuSupport: !firstPlaySupported || !topMenuSupported,
         };
     }
 }
