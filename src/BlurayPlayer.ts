@@ -180,5 +180,44 @@ export default class BlurayPlayer {
 
     generateTitleInfo() {
         const blurayDetected = true;
+
+        const {
+            titles: indexedTitles,
+            appInfo: { 
+                videoFormat, frameRate, initialDynamicRangeType, contentExistFlag: contentExist3D,
+                initialOutputModePreference, userData: providerData,
+            }
+        } = this.index;
+
+        let numHdmvTitles = 0;
+        let numBdjTitles = 0;
+        let bdjDetected = false;
+        const titles = indexedTitles.map(({ objectType, accessType, hdmv, bdj }) => {
+            if (objectType === IndxObjectType.HDMV) {
+                if (!hdmv) 
+                    throw new Error('HDMV Object type mismatch.');
+                numHdmvTitles++;
+                
+                return {
+                    idRef: hdmv.idRef,
+                    interactive: hdmv.playbackType === IndxHdmvPlaybackType.INTERACTIVE,
+                    accessible: accessType 
+                };
+            }
+            
+            if (!bdj) 
+                throw new Error('BDJ Object type mismatch.');
+            bdjDetected = true;
+            numBdjTitles++;
+
+            return {
+                idRef: parseInt(bdj.name)
+            };
+        });
+        
+        return { 
+            videoFormat, frameRate, initialDynamicRangeType, 
+            contentExist3D, initialOutputModePreference, providerData, 
+        };
     }
 }
