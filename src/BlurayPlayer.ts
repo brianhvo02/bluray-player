@@ -1,3 +1,4 @@
+import { bdRegistersInit } from './register.js';
 import { 
     BDMV_VERSIONS, INDX_SIG1, INDX_ACCESS_PROHIBITED_MASK, INDX_ACCESS_HIDDEN_MASK,
     IndxHdmvPlaybackType, IndxBdjPlaybackType, IndxObjectType,
@@ -10,6 +11,7 @@ type FileMap = Record<string, File>;
 
 export default class BlurayPlayer {
     files: FileMap;
+    regs: number[];
     index: BlurayIndex;
     titleInfo: BlurayTitleInfo;
 
@@ -44,12 +46,19 @@ export default class BlurayPlayer {
 
     constructor(files: FileMap, idxArrBuf: ArrayBufferLike) {
         this.files = files;
+
+        // bd_init
+        this.regs = bdRegistersInit();
+        // TODO: Check LIBBLURAY_PERSISTENT_STORAGE (bluray.c:1482)
+
+        // bd_open
         const index = this.parseIndex(idxArrBuf);
         if (!index)
             throw new Error('Could not parse index.bdmv.');
         this.index = index;
         // TODO: Check for incomplete disc (bluray.c:1017)
         this.titleInfo = this.generateTitleInfo();
+        // TODO: Check for AACS and BD+ (vlc/bluray.c:897)
     }
 
     parseHeader(type: number, view: DataView) {
