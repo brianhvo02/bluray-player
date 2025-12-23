@@ -1,19 +1,87 @@
-import { bdRegistersInit } from './register.js';
+import BlurayRegister, { BdPsrEventType, PsrIdx, type BdPsrEvent } from './BlurayRegister.js';
+import { BdEventE } from './types/BlurayEvents.js';
 import { 
     BDMV_VERSIONS, INDX_SIG1, INDX_ACCESS_PROHIBITED_MASK, INDX_ACCESS_HIDDEN_MASK,
-    IndxHdmvPlaybackType, IndxBdjPlaybackType, IndxObjectType,
+    IndxHdmvPlaybackType, IndxBdjPlaybackType, TitleType,
     type HdmvObject, type BdjObject, type IndexObject, type TitleObject, 
-    type BlurayIndex, type BlurayTitle, type BlurayTitleInfo,
+    type BlurayIndex, type BlurayTitle
 } from "./types/BlurayIndex.js";
 import { binToStr, readBits } from "./utils.js";
 
 type FileMap = Record<string, File>;
 
-export default class BlurayPlayer {
+/* BD_EVENT_TITLE special titles */
+const BLURAY_TITLE_FIRST_PLAY  = 0xffff;   /**< "First Play" title started        */
+const BLURAY_TITLE_TOP_MENU    = 0;        /**< "Top Menu" title started          */
+
+export interface BdEvent {
+    event: number;
+    param: number;
+}
+
+interface DiscInfo {
+    blurayDetected: boolean;    /**< 1 if BluRay disc was detected */
+
+    /* Disc ID */
+    discName?: string;          /**< optional disc name in preferred language */
+    udfVolumeId?: string;       /**< optional UDF volume identifier */
+    discId?: ArrayBufferLike;           /**< Disc ID */
+
+    /** HDMV / BD-J titles */
+    noMenuSupport: boolean;            /**< 1 if this disc can't be played using on-disc menus */
+    firstPlaySupported: boolean;       /**< 1 if First Play title is present on the disc and can be played */
+    topMenuSupported: boolean;         /**< 1 if Top Menu title is present on the disc and can be played */
+
+    numTitles: number;               /**< number of titles on the disc, not including "First Play" and "Top Menu" */
+    titles: BlurayTitle[];            /**< index is title number 1 ... N */
+    firstPlay: BlurayTitle | null;    /**< titles[N+1].   NULL if not present on the disc. */
+    topMenu: BlurayTitle | null;      /**< titles[0]. NULL if not present on the disc. */
+
+    numHdmvTitles: number;            /**< number of HDMV titles */
+    numBdjTitles: number;             /**< number of BD-J titles */
+    numUnsupportedTitles: number;     /**< number of unsupported titles */
+
+    /** BD-J info (valid only if disc uses BD-J) */
+    bdjDetected?: boolean;     /**< 1 if disc uses BD-J */
+    libjvmDetected?: boolean;  /**< 1 if usable Java VM was found */
+    bdjHandled?: boolean;      /**< 1 if usable Java VM + libbluray.jar was found */
+
+    bdjOrgId?: string[];        /**< (BD-J) disc organization ID */
+    bdjDiscId?: string[];       /**< (BD-J) disc ID */
+
+    /* disc application info */
+    videoFormat: number;                     /**< \ref bd_video_format_e */
+    frameRate: number;                       /**< \ref bd_video_rate_e */
+    contentExist3D: number;                  /**< 1 if 3D content exists on the disc */
+    initialOutputModePreference: number;     /**< 0 - 2D, 1 - 3D */
+    providerData: ArrayBufferLike;              /**< Content provider data */
+
+    /* AACS info  (valid only if disc uses AACS) */
+    aacsDetected?: number;     /**< 1 if disc is using AACS encoding */
+    libaacsDetected?: number;  /**< 1 if usable AACS decoding library was found */
+    aacsHandled?: number;      /**< 1 if disc is using supported AACS encoding */
+
+    aacsErrorCode?: number;   /**< AACS error code (BD_AACS_*) */
+    aacsMkbv?: number;         /**< AACS MKB version */
+
+    /* BD+ info  (valid only if disc uses BD+) */
+    bdplusDetected?: boolean;     /**< 1 if disc is using BD+ encoding */
+    libbdplusDetected?: boolean;  /**< 1 if usable BD+ decoding library was found */
+    bdplusHandled?: boolean;      /**< 1 if disc is using supporred BD+ encoding */
+
+    bdplusGen?: number;          /**< BD+ content code generation */
+    bdplusDate?: number;         /**< BD+ content code relese date ((year<<16)|(month<<8)|day) */
+
+    /* disc application info (libbluray > 1.2.0) */
+    initialDynamicRangeType: number; /**< bd_dynamic_range_type_e */
+}
+
+export default class BlurayPlayer extends EventTarget {
     files: FileMap;
-    regs: number[];
+    regs: BlurayRegister;
     index: BlurayIndex;
-    titleInfo: BlurayTitleInfo;
+    discInfo: DiscInfo;
+    titleType = TitleType.UNDEF;
 
     static async load() {
         const input = document.createElement('input');
@@ -45,10 +113,12 @@ export default class BlurayPlayer {
     }
 
     constructor(files: FileMap, idxArrBuf: ArrayBufferLike) {
+        super();
+
         this.files = files;
 
         // bd_init
-        this.regs = bdRegistersInit();
+        this.regs = new BlurayRegister();
         // TODO: Check LIBBLURAY_PERSISTENT_STORAGE (bluray.c:1482)
 
         // bd_open
@@ -57,7 +127,7 @@ export default class BlurayPlayer {
             throw new Error('Could not parse index.bdmv.');
         this.index = index;
         // TODO: Check for incomplete disc (bluray.c:1017)
-        this.titleInfo = this.generateTitleInfo();
+        this.discInfo = this.generateDiscInfo();
         // TODO: Check for AACS and BD+ (vlc/bluray.c:897)
     }
 
@@ -106,10 +176,10 @@ export default class BlurayPlayer {
         const [objectType] = readBits(view.getUint8(idx), [2, 6]);
         
         switch (objectType) {
-            case IndxObjectType.HDMV:
+            case TitleType.HDMV:
                 const hdmv = this._parseHdmvObj(idx + 4, view);
                 return hdmv ? { objectType, hdmv } : null;
-            case IndxObjectType.BDJ:
+            case TitleType.BDJ:
                 const bdj = this._parseBdjObj(idx + 4, view);
                 return bdj ? { objectType, bdj } : null;
             default:
@@ -159,8 +229,8 @@ export default class BlurayPlayer {
         const numTitles = dataView.getUint16(indexStart + 28);
         const titles: TitleObject[] = [];
         if (!numTitles) {
-            if (firstPlay.objectType == IndxObjectType.HDMV && firstPlay.hdmv?.idRef == 0xffff && 
-                topMenu.objectType == IndxObjectType.HDMV && topMenu.hdmv?.idRef == 0xffff) {
+            if (firstPlay.objectType == TitleType.HDMV && firstPlay.hdmv?.idRef == 0xffff && 
+                topMenu.objectType == TitleType.HDMV && topMenu.hdmv?.idRef == 0xffff) {
                 console.error('Empty index.');
                 return null;
             }
@@ -170,12 +240,12 @@ export default class BlurayPlayer {
         for (let i = 0; i < numTitles; i++) {
             const [objectType, accessType] = readBits(dataView.getUint8(indexStart + 30 + i * 12), [2, 2, 4]);
                 switch (objectType) {
-                case IndxObjectType.HDMV:
+                case TitleType.HDMV:
                     const hdmv = this._parseHdmvObj(indexStart + 34 + i * 12, dataView);
                     if (!hdmv) return null;
                     titles.push({ objectType, accessType, hdmv });
                     break;
-                case IndxObjectType.BDJ:
+                case TitleType.BDJ:
                     const bdj = this._parseBdjObj(indexStart + 34 + i * 12, dataView);
                     if (!bdj) return null;
                     titles.push({ objectType, accessType, bdj });
@@ -189,7 +259,7 @@ export default class BlurayPlayer {
         return { indxVersion, appInfo, firstPlay, topMenu, titles };
     }
 
-    generateTitleInfo(): BlurayTitleInfo {
+    generateDiscInfo(): DiscInfo {
         const blurayDetected = true;
 
         const {
@@ -206,7 +276,7 @@ export default class BlurayPlayer {
         let bdjDetected = false;
 
         const titles = indexedTitles.map<BlurayTitle>(({ objectType, accessType, hdmv, bdj }) => {
-            if (objectType === IndxObjectType.HDMV) {
+            if (objectType === TitleType.HDMV) {
                 if (!hdmv) 
                     throw new Error('HDMV Object type mismatch.');
                 numHdmvTitles++;
@@ -234,7 +304,7 @@ export default class BlurayPlayer {
             };
         });
 
-        if (firstPlay.objectType === IndxObjectType.BDJ && firstPlay.bdj) {
+        if (firstPlay.objectType === TitleType.BDJ && firstPlay.bdj) {
             bdjDetected = true;
             titles.push({
                 bdj: true,
@@ -244,7 +314,7 @@ export default class BlurayPlayer {
                 hidden: true,
             });
         }
-        if (firstPlay.objectType === IndxObjectType.HDMV && firstPlay.hdmv && firstPlay.hdmv.idRef !== 0xffff) {
+        if (firstPlay.objectType === TitleType.HDMV && firstPlay.hdmv && firstPlay.hdmv.idRef !== 0xffff) {
             titles.push({
                 bdj: false,
                 interactive: firstPlay.hdmv.playbackType === IndxHdmvPlaybackType.INTERACTIVE,
@@ -254,7 +324,7 @@ export default class BlurayPlayer {
             });
         }
 
-        if (topMenu.objectType === IndxObjectType.BDJ && topMenu.bdj) {
+        if (topMenu.objectType === TitleType.BDJ && topMenu.bdj) {
             bdjDetected = true;
             titles.push({
                 bdj: true,
@@ -264,7 +334,7 @@ export default class BlurayPlayer {
                 hidden: false,
             });
         }
-        if (topMenu.objectType === IndxObjectType.HDMV && topMenu.hdmv && topMenu.hdmv.idRef !== 0xffff) {
+        if (topMenu.objectType === TitleType.HDMV && topMenu.hdmv && topMenu.hdmv.idRef !== 0xffff) {
             titles.unshift({
                 bdj: false,
                 interactive: topMenu.hdmv.playbackType === IndxHdmvPlaybackType.INTERACTIVE,
@@ -274,12 +344,12 @@ export default class BlurayPlayer {
             });
         }
 
-        const firstPlaySupported = firstPlay.objectType === IndxObjectType.HDMV && firstPlay.hdmv && firstPlay.hdmv.idRef != 0xffff;
-        // if (firstPlay.objectType === IndxObjectType.BDJ)
+        const firstPlaySupported = firstPlay.objectType === TitleType.HDMV && !!firstPlay.hdmv && firstPlay.hdmv.idRef != 0xffff;
+        // if (firstPlay.objectType === TitleType.BDJ)
             // bd->disc_info.first_play_supported = bd->disc_info.bdj_handled;
 
-        const topMenuSupported = topMenu.objectType === IndxObjectType.HDMV && !!topMenu.hdmv && topMenu.hdmv.idRef != 0xffff;
-        // if (topMenu.objectType === IndxObjectType.BDJ)
+        const topMenuSupported = topMenu.objectType === TitleType.HDMV && !!topMenu.hdmv && topMenu.hdmv.idRef != 0xffff;
+        // if (topMenu.objectType === TitleType.BDJ)
             // bd->disc_info.top_menu_supported = bd->disc_info.bdj_handled;
 
         if (firstPlaySupported)
@@ -291,13 +361,284 @@ export default class BlurayPlayer {
         /* TODO: populate title names (bluray.c:1150) */
         
         return { 
-            blurayDetected,
+            blurayDetected, bdjDetected,
             videoFormat, frameRate, initialDynamicRangeType, 
             contentExist3D, initialOutputModePreference, providerData, 
-            bdjDetected, titles,
+            numHdmvTitles, numBdjTitles, numTitles: titles.length, titles,
+            numUnsupportedTitles: titles.length - numHdmvTitles - numBdjTitles,
+            firstPlaySupported, topMenuSupported,
             firstPlay: firstPlaySupported ? titles[titles.length - 1] : null,
             topMenu: topMenuSupported ? titles[0] : null,
             noMenuSupport: !firstPlaySupported || !topMenuSupported,
         };
+    }
+
+    _queueEvent(event: BdEventE, param: number) {
+        this.dispatchEvent(new CustomEvent('bd-event', { detail: { event, param } }));
+    }
+
+    _processPsrWriteEvent(ev: BdPsrEvent) {
+        if (ev.evType == BdPsrEventType.WRITE)
+            console.log(`PSR write: psr${ev.psrIdx} = ${ev.newVal}`);
+
+        switch (ev.psrIdx) {
+
+            /* current playback position */
+
+            case PsrIdx.ANGLE_NUMBER:
+                // _bdj_event  (bd, BDJ_EVENT_ANGLE,   ev.newVal);
+                this._queueEvent(BdEventE.ANGLE, ev.newVal);
+                break;
+            case PsrIdx.TITLE_NUMBER:
+                this._queueEvent(BdEventE.TITLE, ev.newVal);
+                break;
+            case PsrIdx.PLAYLIST:
+                // _bdj_event  (bd, BDJ_EVENT_PLAYLIST,ev.newVal);
+                this._queueEvent(BdEventE.PLAYLIST, ev.newVal);
+                break;
+            case PsrIdx.PLAYITEM:
+                // _bdj_event  (bd, BDJ_EVENT_PLAYITEM,ev.newVal);
+                this._queueEvent(BdEventE.PLAYITEM, ev.newVal);
+                break;
+            case PsrIdx.TIME:
+                // _bdj_event  (bd, BDJ_EVENT_PTS,     ev.newVal);
+                break;
+
+            case 102:
+                // _bdj_event  (bd, BDJ_EVENT_PSR102,  ev.newVal);
+                break;
+            case 103:
+                // disc_event(bd->disc, DISC_EVENT_APPLICATION, ev.newVal);
+                break;
+
+            default:;
+        }
+    }
+
+    _processPsrChangeEvent(ev: BdPsrEvent) {
+        console.log(`PSR change: psr${ev.psrIdx} = ${ev.newVal}`);
+        this._processPsrWriteEvent(ev);
+
+        switch (ev.psrIdx) {
+            /* current playback position */
+
+            case PsrIdx.TITLE_NUMBER:
+                // disc_event(bd->disc, DISC_EVENT_TITLE, ev.newVal);
+                break;
+
+            case PsrIdx.CHAPTER:
+                // _bdj_event  (bd, BDJ_EVENT_CHAPTER, ev.newVal);
+                if (ev.newVal != 0xffff)
+                    this._queueEvent(BdEventE.CHAPTER, ev.newVal);
+                break;
+
+            /* stream selection */
+
+            case PsrIdx.IG_STREAM_ID:
+                this._queueEvent(BdEventE.IG_STREAM, ev.newVal);
+                break;
+
+            case PsrIdx.PRIMARY_AUDIO_ID:
+                // _bdj_event(bd, BDJ_EVENT_AUDIO_STREAM, ev.newVal);
+                this._queueEvent(BdEventE.AUDIO_STREAM, ev.newVal);
+                break;
+
+            case PsrIdx.PG_STREAM:
+                // _bdj_event(bd, BDJ_EVENT_SUBTITLE, ev.newVal);
+                if ((ev.newVal & 0x80000fff) != (ev.oldVal & 0x80000fff)) {
+                    this._queueEvent(BdEventE.PG_TEXTST,        Number(!!(ev.newVal & 0x80000000)));
+                    this._queueEvent(BdEventE.PG_TEXTST_STREAM,    ev.newVal & 0xfff);
+                }
+
+                // TODO
+                // if (bd->st0.clip) {
+                //     _init_pg_stream(bd);
+                //     if (bd->st_textst.clip) {
+                //         BD_DEBUG(DBG_BLURAY | DBG_CRIT, "Changing TextST stream\n");
+                //         _preload_textst_subpath(bd);
+                //     }
+                // }
+
+                break;
+
+            case PsrIdx.SECONDARY_AUDIO_VIDEO:
+                /* secondary video */
+                if ((ev.newVal & 0x8f00ff00) != (ev.oldVal & 0x8f00ff00)) {
+                    this._queueEvent(BdEventE.SECONDARY_VIDEO, Number(!!(ev.newVal & 0x80000000)));
+                    this._queueEvent(BdEventE.SECONDARY_VIDEO_SIZE, (ev.newVal >> 24) & 0xf);
+                    this._queueEvent(BdEventE.SECONDARY_VIDEO_STREAM, (ev.newVal & 0xff00) >> 8);
+                }
+                /* secondary audio */
+                if ((ev.newVal & 0x400000ff) != (ev.oldVal & 0x400000ff)) {
+                    this._queueEvent(BdEventE.SECONDARY_AUDIO, Number(!!(ev.newVal & 0x40000000)));
+                    this._queueEvent(BdEventE.SECONDARY_AUDIO_STREAM, ev.newVal & 0xff);
+                }
+                // _bdj_event(bd, BDJ_EVENT_SECONDARY_STREAM, ev.newVal);
+                break;
+
+            /* 3D status */
+            case PsrIdx._3D_STATUS:
+                this._queueEvent(BdEventE.STEREOSCOPIC_STATUS, ev.newVal & 1);
+                break;
+
+            default:;
+        }
+    }
+
+    _processPsrRestoreEvent(ev: BdPsrEvent) {
+        /* PSR restore events are handled internally.
+        * Restore stored playback position.
+        */
+
+        console.log(`PSR restore: psr${ev.psrIdx} = ${ev.newVal}`);
+
+        switch (ev.psrIdx) {
+            case PsrIdx.ANGLE_NUMBER:
+                /* can't set angle before playlist is opened */
+                return;
+            case PsrIdx.TITLE_NUMBER:
+                /* pass to the application */
+                this._queueEvent(BdEventE.TITLE, ev.newVal);
+                return;
+            case PsrIdx.CHAPTER:
+                /* will be selected automatically */
+                return;
+            case PsrIdx.PLAYLIST:
+                // bd_select_playlist(bd, ev.newVal);
+                // nav_set_angle(bd->title, bd_psr_read(bd->regs, PSR_ANGLE_NUMBER) - 1);
+                return;
+            case PsrIdx.PLAYITEM:
+                // bd_seek_playitem(bd, ev.newVal);
+                return;
+            case PsrIdx.TIME:
+                // _clip_seek_time(bd, ev.newVal);
+                // _init_ig_stream(bd);
+                // _run_gc(bd, GC_CTRL_INIT_MENU, 0);
+                return;
+
+            case PsrIdx.SELECTED_BUTTON_ID:
+            case PsrIdx.MENU_PAGE_ID:
+                /* handled by graphics controller */
+                return;
+
+            default:
+                /* others: ignore */
+                return;
+        }
+    }
+
+
+    _processPsrEvent({ detail }: CustomEventInit<BdPsrEvent>) {
+        if (!detail) return;
+
+        switch(detail.evType) {
+            case BdPsrEventType.WRITE:
+                this._processPsrWriteEvent(detail);
+                break;
+            case BdPsrEventType.CHANGE:
+                this._processPsrChangeEvent(detail);
+                break;
+            case BdPsrEventType.RESTORE:
+                this._processPsrRestoreEvent(detail);
+                break;
+            case BdPsrEventType.SAVE:
+                console.log('PSR save event');
+                break;
+            default:
+                console.log(`PSR event ${detail.evType}: psr${detail.psrIdx} = ${detail.newVal}`);
+                break;
+        }
+    }
+
+    _queueInitialPsrEvents() {
+        [
+            PsrIdx.ANGLE_NUMBER,
+            PsrIdx.TITLE_NUMBER,
+            PsrIdx.IG_STREAM_ID,
+            PsrIdx.PRIMARY_AUDIO_ID,
+            PsrIdx.PG_STREAM,
+            PsrIdx.SECONDARY_AUDIO_VIDEO,
+        ].forEach(psr => this._processPsrChangeEvent({
+            evType: BdPsrEventType.CHANGE,
+            psrIdx: psr,
+            oldVal: 0,
+            newVal: 1
+        }));
+    }
+
+    _playHdmv(idRef: number) {
+        // _stop_bdj(bd);
+
+        this.titleType = TitleType.HDMV;
+
+        
+    }
+
+    _playTitle(title: number) {
+        if (!this.discInfo.titles) {
+            console.error(`_playTitle(#${title}): No disc index`);
+            return;
+        }
+
+        if (this.discInfo.noMenuSupport) {
+            console.error('_playTitle(): no menu support');
+            return;
+        }
+
+        if (title === BLURAY_TITLE_FIRST_PLAY) {
+            if (!this.discInfo.firstPlay)
+                throw new Error('_playTitle(): Expected first play title when none exists');
+
+            this.regs.psrWrite(PsrIdx.TITLE_NUMBER, BLURAY_TITLE_FIRST_PLAY); /* 5.2.3.3 */
+
+            if (!this.discInfo.firstPlaySupported) {
+                /* no first play title (5.2.3.3) */
+                this.titleType = TitleType.HDMV;
+                throw new Error('_playTitle(): No first play title');
+            }
+
+            if (this.discInfo.firstPlay?.bdj) {
+                // return _playBdj(title);
+                throw new Error('BDJ not supported.');
+            } else {
+                return this._playHdmv(this.discInfo.firstPlay.idRef);
+            }
+        }
+
+        /* bd_play not called ? */
+        if (this.titleType == TitleType.UNDEF) {
+            console.error('bd_call_title(): bd_play() not called!');
+            return;
+        }
+
+        /* top menu ? */
+        if (title == BLURAY_TITLE_TOP_MENU) {
+            if (!this.discInfo.topMenuSupported) {
+                /* no top menu (5.2.3.3) */
+                console.error('_play_title(): No top menu title');
+                this.titleType = TitleType.HDMV;
+                return 0;
+            }
+        }
+
+        /* valid title from disc index ? */
+        if (title <= this.discInfo.numTitles) {
+            this.regs.psrWrite(PsrIdx.TITLE_NUMBER, title); /* 5.2.3.3 */
+            if (this.discInfo.titles[title].bdj) {
+                // return _playBdj(title);
+                throw new Error('BDJ not supported.');
+            } else {
+                return this._playHdmv(this.discInfo.titles[title].idRef);
+            }
+        } else {
+            console.error(`_play_title(#${title}): Title not found`);
+        }
+    }
+
+    play() {
+        this.titleType = TitleType.UNDEF;
+        this.regs.addEventListener('change', this._processPsrEvent);
+        this._queueInitialPsrEvents();
+        this._playTitle(BLURAY_TITLE_FIRST_PLAY);
     }
 }

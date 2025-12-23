@@ -160,3 +160,30 @@ export enum BlurayPersistentStorage {
     DISABLE = 0,  /**< disable persistent storage between playback sessions */
     ENABLE  = 1,  /**< enable persistent storage */
 };
+
+export enum BlurayPlayerSetting {
+    BLURAY_PLAYER_SETTING_AUDIO_LANG     = 16,    /**< Initial audio language.      String (ISO 639-2/T). */
+    BLURAY_PLAYER_SETTING_PG_LANG        = 17,    /**< Initial PG/SPU language.     String (ISO 639-2/T). */
+    BLURAY_PLAYER_SETTING_MENU_LANG      = 18,    /**< Initial menu language.       String (ISO 639-2/T). */
+    BLURAY_PLAYER_SETTING_COUNTRY_CODE   = 19,    /**< Player country code.         String (ISO 3166-1/alpha-2). */
+    BLURAY_PLAYER_SETTING_REGION_CODE    = 20,    /**< Player region code.          Integer. */
+    BLURAY_PLAYER_SETTING_OUTPUT_PREFER  = 21,    /**< Output mode preference.      Integer. */
+    BLURAY_PLAYER_SETTING_PARENTAL       = 13,    /**< Age for parental control.    Integer. */
+    BLURAY_PLAYER_SETTING_AUDIO_CAP      = 15,    /**< Audio capability.            Bit mask. */
+    BLURAY_PLAYER_SETTING_VIDEO_CAP      = 29,    /**< Video capability.            Bit mask. */
+    BLURAY_PLAYER_SETTING_DISPLAY_CAP    = 23,    /**< Display capability.          Bit mask. */
+    BLURAY_PLAYER_SETTING_3D_CAP         = 24,    /**< 3D capability.               Bit mask. */
+    BLURAY_PLAYER_SETTING_UHD_CAP         = 25,   /**< UHD capability.              */
+    BLURAY_PLAYER_SETTING_UHD_DISPLAY_CAP = 26,   /**< UHD display capability.      */
+    BLURAY_PLAYER_SETTING_HDR_PREFERENCE  = 27,   /**< HDR preference.              */
+    BLURAY_PLAYER_SETTING_SDR_CONV_PREFER = 28,   /**< SDR conversion preference.   */
+    BLURAY_PLAYER_SETTING_TEXT_CAP       = 30,    /**< Text Subtitle capability.    Bit mask. */
+    BLURAY_PLAYER_SETTING_PLAYER_PROFILE = 31,    /**< Player profile and version. */
+
+    BLURAY_PLAYER_SETTING_DECODE_PG          = 0x100, /**< Enable/disable PG (subtitle) decoder. Integer. Default: disabled. */
+    BLURAY_PLAYER_SETTING_PERSISTENT_STORAGE = 0x101, /**< Enable/disable BD-J persistent storage. Integer. Default: enabled. */
+
+    BLURAY_PLAYER_PERSISTENT_ROOT            = 0x200, /**< Root path to the BD_J persistent storage location. String. */
+    BLURAY_PLAYER_CACHE_ROOT                 = 0x201, /**< Root path to the BD_J cache storage location. String. */
+    BLURAY_PLAYER_JAVA_HOME                  = 0x202, /**< Location of JRE. String. Default: NULL (autodetect). */
+}

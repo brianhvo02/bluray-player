@@ -9,3 +9,5 @@ export const readBits = function(value: number, bits: number[]) {
 
 export const strToBin = (str: string) => new DataView(new TextEncoder().encode(str).buffer).getUint32(0);
 export const binToStr = (bin: ArrayBufferLike, idx: number, len: number) => new TextDecoder().decode(bin.slice(idx, idx + len));
+
+export const numToHex = (num: number, byteLen: number) => num.toString(16).padStart(byteLen * 2, '0');

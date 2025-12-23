@@ -17,7 +17,8 @@ export const INDX_SIG1 = strToBin('INDX');
 export const INDX_ACCESS_PROHIBITED_MASK = 0x01;
 export const INDX_ACCESS_HIDDEN_MASK     = 0x02;
 
-export enum IndxObjectType {
+export enum TitleType {
+    UNDEF = 0,
     HDMV = 1,
     BDJ  = 2,
 };
@@ -33,7 +34,7 @@ export enum IndxBdjPlaybackType {
 };
 
 export interface IndexObject {
-    objectType: IndxObjectType;
+    objectType: TitleType;
     hdmv?: HdmvObject;
     bdj?: BdjObject;
 }
@@ -75,19 +76,4 @@ export interface BlurayTitle {
     interactive: boolean;
     accessible: boolean;
     hidden: boolean;
-}
-
-export interface BlurayTitleInfo {
-    blurayDetected: boolean;
-    videoFormat: number;
-    frameRate: number;
-    initialDynamicRangeType: number;
-    contentExist3D: number;
-    initialOutputModePreference: number;
-    providerData: ArrayBufferLike;
-    bdjDetected: boolean;
-    titles: BlurayTitle[];
-    firstPlay: BlurayTitle | null;
-    topMenu: BlurayTitle | null;
-    noMenuSupport: boolean;
 }
