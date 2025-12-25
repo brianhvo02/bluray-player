@@ -1,9 +1,12 @@
-export const readBits = function(value: number, bits: number[]) {
-    return bits.reverse().reduce(([arr, bitLen]: [number[], number], bit) => {
-        const mask = [...Array(bit).keys()].reduce((sum, val) => sum + (2 ** (bitLen + val)), 0);
-        arr.push((value & mask) >> bitLen);
+export const readBits = function(_value: number, bits: number[]) {
+    const value = BigInt(_value);
+    return bits.reverse().reduce(([arr, _bitLen]: [number[], number], bit) => {
+        const bitLen = BigInt(_bitLen);
 
-        return [arr, bitLen + bit] as [number[], number];
+        const mask = [...Array(bit).keys()].reduce((sum, val) => sum + (2n ** (bitLen + BigInt(val))), 0n);
+        arr.push(Number((value & mask) >> bitLen));
+
+        return [arr, _bitLen + bit] as [number[], number];
     }, [[], 0])[0].reverse();
 }
 

@@ -1,5 +1,5 @@
-import { BlurayAcap, BlurayOutput, BlurayPlayerProfile, BlurayRegion, BlurayVcap } from './types/PlayerSettings';
-import { numToHex } from './utils';
+import { BlurayAcap, BlurayOutput, BlurayPlayerProfile, BlurayRegion, BlurayVcap } from './PlayerSettings.js';
+import { numToHex } from './utils.js';
 
 const BD_PSR_COUNT = 128;
 const BD_GPR_COUNT = 4096;
@@ -180,14 +180,28 @@ export interface BdPsrEvent {
     newVal: number;
 }
 
+export const PSR_FLAG = 0x80000000;
+
 export default class BlurayRegister extends EventTarget {
     psr = [...psrInit];
     gpr = [...Array(BD_GPR_COUNT).keys()].fill(0);
 
+    static isValidReg(reg: number) {
+        if (reg & PSR_FLAG) {
+            if (reg & ~0x8000007f)
+                return false;
+        } else {
+            if (reg & ~0x00000fff)
+                return false;
+        }
+
+        return true;
+    }
+
     psrRead(reg: number) {
         if (reg >= BD_PSR_COUNT) {
             console.error(`psrRead(${reg}): invalid register`);
-            return null;
+            return 0;
         }
         
         return this.psr[reg];
@@ -204,7 +218,7 @@ export default class BlurayRegister extends EventTarget {
             (reg >= 23 && reg <= 31) ||
             (reg >= 48 && reg <= 61)) {
             console.error(`psrWrite(${reg}, ${val}): read-only register!`);
-            return null;
+            return 0;
         }
 
         if (this.psr[reg] == val) {
@@ -225,6 +239,60 @@ export default class BlurayRegister extends EventTarget {
         this.psr[reg] = val;
 
         this.dispatchEvent(new CustomEvent('change', { detail: ev }));
-        return ev;
+        return val;
+    }
+
+    psrSaveState() {
+        this.psr.copyWithin(36, 4, 9);
+        this.psr.copyWithin(42, 10, 13);
+
+        const ev: BdPsrEvent = {
+            evType: BdPsrEventType.SAVE,
+            psrIdx: -1,
+            oldVal: 0,
+            newVal: 0,
+        };
+
+        this.dispatchEvent(new CustomEvent('change', { detail: ev }));
+    }
+
+    psrRestoreState() {
+        const oldPsr = this.psr.slice(0, 13);
+        this.psr.copyWithin(4, 36, 41);
+        this.psr.copyWithin(10, 42, 45);
+        
+        const newPsr = this.psr.slice(0, 13);
+        this.psr.splice(36, 5, ...psrInit.slice(36, 41));
+        this.psr.splice(42, 3, ...psrInit.slice(42, 45));
+
+        for (let i = 0; i < 9; i++) {
+            const ev: BdPsrEvent = {
+                evType: BdPsrEventType.RESTORE,
+                psrIdx: i + 4,
+                oldVal: oldPsr[i],
+                newVal: newPsr[i],
+            };
+            
+            this.dispatchEvent(new CustomEvent('change', { detail: ev }));
+        }
+
+    }
+
+    gprRead(reg: number) {
+        if (reg >= BD_GPR_COUNT) {
+            console.error(`gprRead(${reg}): invalid register`);
+            return 0;
+        }
+
+        return this.gpr[reg];
+    }
+
+    gprWrite(reg: number, val: number) {
+        if (reg >= BD_GPR_COUNT) {
+            console.error(`psrRead(${reg}): invalid register`);
+            return 0;
+        }
+
+        return this.gpr[reg] = val;
     }
 }

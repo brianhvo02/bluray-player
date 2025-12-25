@@ -86,3 +86,47 @@ export enum BdEventE {
 
     /*LAST = 33, */
 }
+
+/*
+ * events from hdmv_run()
+ */
+
+export enum HdmvEventE {
+    NONE = 0,       /* no events */
+    END,            /* end of program (movie object) */
+    IG_END,         /* end of program (interactive) */
+
+    /*
+     * playback control
+     */
+
+    TITLE,          /* play title (from disc index) */
+    PLAY_PL,        /* select playlist */
+    PLAY_PL_PM,     /* select playlist (and mark) */
+    PLAY_PL_PI,     /* select playlist (and playitem) */
+    PLAY_PI,        /* seek to playitem */
+    PLAY_PM,        /* seek to playmark */
+    PLAY_STOP,      /* stop playing playlist */
+
+    STILL,          /* param: boolean */
+
+    /*
+     * -> graphics controller
+     */
+    SET_BUTTON_PAGE,
+    ENABLE_BUTTON,
+    DISABLE_BUTTON,
+    POPUP_OFF,
+
+};
+
+export interface BdEvent {
+    event: BdEventE;
+    param: number;
+}
+
+export interface HdmvEvent {
+    event: HdmvEventE;
+    param1: number;
+    param2: number;
+}
