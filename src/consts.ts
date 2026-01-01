@@ -2,6 +2,7 @@ import { strToBin } from './utils.js';
 
 export const INDX_SIG1 = strToBin('INDX');
 export const MOBJ_SIG1 = strToBin('MOBJ');
+export const MPLS_SIG1 = strToBin('MPLS');
 
 export const BDMV_VERSION_0100 = strToBin('0100');
 export const BDMV_VERSION_0200 = strToBin('0200');
